@@ -52,6 +52,9 @@ case class KyuubiConf(loadSysDefault: Boolean = true) extends Logging {
   }
 
   def set[T](entry: ConfigEntry[T], value: T): KyuubiConf = {
+    require(entry != null, "entry cannot be null")
+    require(value != null, s"value cannot be null for key: ${entry.key}")
+    require(containsConfigEntry(entry), s"$entry is not registered")
     if (settings.put(entry.key, entry.strConverter(value)) == null) {
       logDeprecationWarning(entry.key)
     }
@@ -59,13 +62,14 @@ case class KyuubiConf(loadSysDefault: Boolean = true) extends Logging {
   }
 
   def set[T](entry: OptionalConfigEntry[T], value: T): KyuubiConf = {
+    require(containsConfigEntry(entry), s"$entry is not registered")
     set(entry.key, entry.strConverter(Option(value)))
     this
   }
 
   def set(key: String, value: String): KyuubiConf = {
-    require(key != null)
-    require(value != null)
+    require(key != null, "key cannot be null")
+    require(value != null, s"value cannot be null for key: $key")
     if (settings.put(key, value) == null) {
       logDeprecationWarning(key)
     }
@@ -73,6 +77,7 @@ case class KyuubiConf(loadSysDefault: Boolean = true) extends Logging {
   }
 
   def setIfMissing[T](entry: ConfigEntry[T], value: T): KyuubiConf = {
+    require(containsConfigEntry(entry), s"$entry is not registered")
     if (settings.putIfAbsent(entry.key, entry.strConverter(value)) == null) {
       logDeprecationWarning(entry.key)
     }
@@ -89,6 +94,7 @@ case class KyuubiConf(loadSysDefault: Boolean = true) extends Logging {
   }
 
   def get[T](config: ConfigEntry[T]): T = {
+    require(containsConfigEntry(config), s"$config is not registered")
     config.readFrom(reader)
   }
 
@@ -102,6 +108,7 @@ case class KyuubiConf(loadSysDefault: Boolean = true) extends Logging {
   }
 
   def unset(entry: ConfigEntry[_]): KyuubiConf = {
+    require(containsConfigEntry(entry), s"$entry is not registered")
     unset(entry.key)
   }
 
@@ -184,14 +191,40 @@ object KyuubiConf {
   final val KYUUBI_ENGINE_ENV_PREFIX = "kyuubi.engineEnv"
   final val KYUUBI_BATCH_CONF_PREFIX = "kyuubi.batchConf"
 
-  val kyuubiConfEntries: java.util.Map[String, ConfigEntry[_]] =
-    java.util.Collections.synchronizedMap(new java.util.HashMap[String, ConfigEntry[_]]())
+  private[this] val kyuubiConfEntriesUpdateLock = new Object
 
-  private def register(entry: ConfigEntry[_]): Unit = kyuubiConfEntries.synchronized {
-    require(
-      !kyuubiConfEntries.containsKey(entry.key),
-      s"Duplicate ConfigEntry. ${entry.key} has been registered")
-    kyuubiConfEntries.put(entry.key, entry)
+  @volatile
+  private[this] var kyuubiConfEntries: java.util.Map[String, ConfigEntry[_]] =
+    java.util.Collections.emptyMap()
+
+  private[config] def register(entry: ConfigEntry[_]): Unit =
+    kyuubiConfEntriesUpdateLock.synchronized {
+      require(
+        !kyuubiConfEntries.containsKey(entry.key),
+        s"Duplicate ConfigEntry. ${entry.key} has been registered")
+      val updatedMap = new java.util.HashMap[String, ConfigEntry[_]](kyuubiConfEntries)
+      updatedMap.put(entry.key, entry)
+      kyuubiConfEntries = updatedMap
+    }
+
+  // For testing only
+  private[config] def unregister(entry: ConfigEntry[_]): Unit =
+    kyuubiConfEntriesUpdateLock.synchronized {
+      val updatedMap = new java.util.HashMap[String, ConfigEntry[_]](kyuubiConfEntries)
+      updatedMap.remove(entry.key)
+      kyuubiConfEntries = updatedMap
+    }
+
+  private[config] def getConfigEntry(key: String): ConfigEntry[_] = {
+    kyuubiConfEntries.get(key)
+  }
+
+  private[config] def getConfigEntries(): java.util.Collection[ConfigEntry[_]] = {
+    kyuubiConfEntries.values()
+  }
+
+  private[config] def containsConfigEntry(entry: ConfigEntry[_]): Boolean = {
+    getConfigEntry(entry.key) == entry
   }
 
   def buildConf(key: String): ConfigBuilder = {
@@ -640,40 +673,13 @@ object KyuubiConf {
       .stringConf
       .createOptional
 
-  @deprecated(s"using kyuubi.authentication.ldap.binddn instead", "1.6.0")
   val AUTHENTICATION_LDAP_GUIDKEY: ConfigEntry[String] =
     buildConf("kyuubi.authentication.ldap.guidKey")
-      .doc("(deprecated)LDAP attribute name whose values are unique in this LDAP server." +
+      .doc("LDAP attribute name whose values are unique in this LDAP server." +
         "For example:uid or cn.")
       .version("1.2.0")
       .stringConf
       .createWithDefault("uid")
-
-  val AUTHENTICATION_LDAP_BINDDN: OptionalConfigEntry[String] =
-    buildConf("kyuubi.authentication.ldap.binddn")
-      .doc("The user with which to bind to the LDAP server, and search for the full domain name " +
-        "of the user being authenticated." +
-        " For example: uid=admin,cn=Directory Manager,ou=users,dc=example,dc=com")
-      .version("1.6.0")
-      .stringConf
-      .createOptional
-
-  val AUTHENTICATION_LDAP_PASSWORD: OptionalConfigEntry[String] =
-    buildConf("kyuubi.authentication.ldap.bindpw")
-      .doc("The password for the bind user," +
-        " to be used to search for the full name of the user being authenticated.")
-      .version("1.6.0")
-      .stringConf
-      .createOptional
-
-  val AUTHENTICATION_LDAP_ATTRIBUTES: ConfigEntry[Seq[String]] =
-    buildConf("kyuubi.authentication.ldap.attrs")
-      .doc("Specifies part of the search as an attribute returned by LDAP." +
-        " For example: mail,name.")
-      .version("1.6.0")
-      .stringConf
-      .toSequence()
-      .createWithDefault(Seq("mail"))
 
   val AUTHENTICATION_JDBC_DRIVER: OptionalConfigEntry[String] =
     buildConf("kyuubi.authentication.jdbc.driver.class")
@@ -1519,6 +1525,7 @@ object KyuubiConf {
       .checkValue(_.toSet.subsetOf(Set("JSON", "JDBC", "CUSTOM")), "Unsupported event loggers")
       .createWithDefault(Nil)
 
+  @deprecated("using kyuubi.engine.spark.event.loggers instead", "1.6.0")
   val ENGINE_EVENT_LOGGERS: ConfigEntry[Seq[String]] =
     buildConf("kyuubi.engine.event.loggers")
       .doc("A comma separated list of engine history loggers, where engine/session/operation etc" +
@@ -1736,6 +1743,16 @@ object KyuubiConf {
       .version("1.5.0")
       .stringConf
       .createOptional
+
+  val SERVER_INFO_PROVIDER: ConfigEntry[String] =
+    buildConf("kyuubi.server.info.provider")
+      .doc("The server information provider name, some clients may rely on this information" +
+        " to check the server compatibilities and functionalities." +
+        " <li>SERVER: Return Kyuubi server information.</li>" +
+        " <li>ENGINE: Return Kyuubi engine information.</li>")
+      .version("1.6.1")
+      .stringConf
+      .createWithDefault("ENGINE")
 
   val ENGINE_SPARK_SHOW_PROGRESS: ConfigEntry[Boolean] =
     buildConf("kyuubi.session.engine.spark.showProgress")
@@ -1963,8 +1980,7 @@ object KyuubiConf {
     SERVER_LIMIT_CONNECTIONS_PER_IPADDRESS,
     SERVER_LIMIT_CONNECTIONS_PER_USER_IPADDRESS,
     SERVER_LIMIT_CONNECTIONS_PER_USER,
-    SESSION_LOCAL_DIR_ALLOW_LIST,
-    AUTHENTICATION_LDAP_PASSWORD)
+    SESSION_LOCAL_DIR_ALLOW_LIST)
 
   /**
    * Holds information about keys that have been deprecated.
@@ -2033,11 +2049,7 @@ object KyuubiConf {
       DeprecatedConfig(
         "kyuubi.ha.zookeeper.acl.enabled",
         "1.3.2",
-        "Use kyuubi.ha.zookeeper.auth.type and kyuubi.ha.zookeeper.engine.auth.type instead"),
-      DeprecatedConfig(
-        AUTHENTICATION_LDAP_GUIDKEY.key,
-        "1.6.0",
-        s"using ${AUTHENTICATION_LDAP_BINDDN.key} instead"))
+        "Use kyuubi.ha.zookeeper.auth.type and kyuubi.ha.zookeeper.engine.auth.type instead"))
     Map(configs.map { cfg => cfg.key -> cfg }: _*)
   }
 
@@ -2062,4 +2074,50 @@ object KyuubiConf {
       .version("1.6.0")
       .stringConf
       .createOptional
+
+  val ENGINE_SPARK_EVENT_LOGGERS: ConfigEntry[Seq[String]] =
+    buildConf("kyuubi.engine.spark.event.loggers")
+      .doc("A comma separated list of engine loggers, where engine/session/operation etc" +
+        " events go. We use spark logger by default.<ul>" +
+        " <li>SPARK: the events will be written to the spark listener bus.</li>" +
+        " <li>JSON: the events will be written to the location of" +
+        s" ${ENGINE_EVENT_JSON_LOG_PATH.key}</li>" +
+        " <li>JDBC: to be done</li>" +
+        " <li>CUSTOM: to be done.</li></ul>")
+      .version("1.7.0")
+      .fallbackConf(ENGINE_EVENT_LOGGERS)
+
+  val ENGINE_HIVE_EVENT_LOGGERS: ConfigEntry[Seq[String]] =
+    buildConf("kyuubi.engine.hive.event.loggers")
+      .doc("A comma separated list of engine history loggers, where engine/session/operation etc" +
+        " events go. We use spark logger by default.<ul>" +
+        " <li>JSON: the events will be written to the location of" +
+        s" ${ENGINE_EVENT_JSON_LOG_PATH.key}</li>" +
+        " <li>JDBC: to be done</li>" +
+        " <li>CUSTOM: to be done.</li></ul>")
+      .version("1.7.0")
+      .stringConf
+      .transform(_.toUpperCase(Locale.ROOT))
+      .toSequence()
+      .checkValue(
+        _.toSet.subsetOf(Set("JSON", "JDBC", "CUSTOM")),
+        "Unsupported event loggers")
+      .createWithDefault(Seq("JSON"))
+
+  val ENGINE_TRINO_EVENT_LOGGERS: ConfigEntry[Seq[String]] =
+    buildConf("kyuubi.engine.trino.event.loggers")
+      .doc("A comma separated list of engine history loggers, where engine/session/operation etc" +
+        " events go. We use spark logger by default.<ul>" +
+        " <li>JSON: the events will be written to the location of" +
+        s" ${ENGINE_EVENT_JSON_LOG_PATH.key}</li>" +
+        " <li>JDBC: to be done</li>" +
+        " <li>CUSTOM: to be done.</li></ul>")
+      .version("1.7.0")
+      .stringConf
+      .transform(_.toUpperCase(Locale.ROOT))
+      .toSequence()
+      .checkValue(
+        _.toSet.subsetOf(Set("JSON", "JDBC", "CUSTOM")),
+        "Unsupported event loggers")
+      .createWithDefault(Seq("JSON"))
 }

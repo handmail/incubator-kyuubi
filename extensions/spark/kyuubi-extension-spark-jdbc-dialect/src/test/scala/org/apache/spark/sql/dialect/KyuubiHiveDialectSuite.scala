@@ -15,28 +15,21 @@
  * limitations under the License.
  */
 
-package org.apache.kyuubi.spark.connector.hive
+package org.apache.spark.sql.dialect
 
-import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.catalyst.catalog.CatalogTable
-import org.apache.spark.sql.connector.read.Scan
-import org.apache.spark.sql.execution.datasources.v2.FileScanBuilder
-import org.apache.spark.sql.types.StructType
+// scalastyle:off
+import org.scalatest.funsuite.AnyFunSuite
 
-case class HiveScanBuilder(
-    sparkSession: SparkSession,
-    fileIndex: HiveCatalogFileIndex,
-    dataSchema: StructType,
-    table: CatalogTable)
-  extends FileScanBuilder(sparkSession, fileIndex, dataSchema) {
+class KyuubiHiveDialectSuite extends AnyFunSuite {
+// scalastyle:on
 
-  override def build(): Scan = {
-    HiveScan(
-      sparkSession = sparkSession,
-      fileIndex = fileIndex,
-      catalogTable = table,
-      dataSchema = dataSchema,
-      readDataSchema = readDataSchema(),
-      readPartitionSchema = readPartitionSchema())
+  test("[KYUUBI #3489] Kyuubi Hive dialect: can handle jdbc url") {
+    assert(KyuubiHiveDialect.canHandle("jdbc:hive2://"))
+    assert(KyuubiHiveDialect.canHandle("jdbc:kyuubi://"))
+  }
+
+  test("[KYUUBI #3489] Kyuubi Hive dialect: quoteIdentifier") {
+    assertResult("`id`")(KyuubiHiveDialect.quoteIdentifier("id"))
+    assertResult("`table`.`id`")(KyuubiHiveDialect.quoteIdentifier("table.id"))
   }
 }

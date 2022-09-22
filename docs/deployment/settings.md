@@ -143,12 +143,9 @@ kyuubi.authentication.jdbc.password|&lt;undefined&gt;|Database password for JDBC
 kyuubi.authentication.jdbc.query|&lt;undefined&gt;|Query SQL template with placeholders for JDBC Authentication Provider to execute. Authentication passes if the result set is not empty.The SQL statement must start with the `SELECT` clause. Available placeholders are `${user}` and `${password}`.|string|1.6.0
 kyuubi.authentication.jdbc.url|&lt;undefined&gt;|JDBC URL for JDBC Authentication Provider.|string|1.6.0
 kyuubi.authentication.jdbc.user|&lt;undefined&gt;|Database user for JDBC Authentication Provider.|string|1.6.0
-kyuubi.authentication.ldap.attrs|mail|Specifies part of the search as an attribute returned by LDAP. For example: mail,name.|seq|1.6.0
 kyuubi.authentication.ldap.base.dn|&lt;undefined&gt;|LDAP base DN.|string|1.0.0
-kyuubi.authentication.ldap.binddn|&lt;undefined&gt;|The user with which to bind to the LDAP server, and search for the full domain name of the user being authenticated. For example: uid=admin,cn=Directory Manager,ou=users,dc=example,dc=com|string|1.6.0
-kyuubi.authentication.ldap.bindpw|&lt;undefined&gt;|The password for the bind user, to be used to search for the full name of the user being authenticated.|string|1.6.0
 kyuubi.authentication.ldap.domain|&lt;undefined&gt;|LDAP domain.|string|1.0.0
-kyuubi.authentication.ldap.guidKey|uid|(deprecated)LDAP attribute name whose values are unique in this LDAP server.For example:uid or cn.|string|1.2.0
+kyuubi.authentication.ldap.guidKey|uid|LDAP attribute name whose values are unique in this LDAP server.For example:uid or cn.|string|1.2.0
 kyuubi.authentication.ldap.url|&lt;undefined&gt;|SPACE character separated LDAP connection URL(s).|string|1.0.0
 kyuubi.authentication.sasl.qop|auth|Sasl QOP enable higher levels of protection for Kyuubi communication with clients.<ul> <li>auth - authentication only (default)</li> <li>auth-int - authentication plus integrity protection</li> <li>auth-conf - authentication plus integrity and confidentiality protection. This is applicable only if Kyuubi is configured to use Kerberos authentication.</li> </ul>|string|1.0.0
 
@@ -229,6 +226,7 @@ kyuubi.engine.event.loggers|SPARK|A comma separated list of engine history logge
 kyuubi.engine.flink.extra.classpath|&lt;undefined&gt;|The extra classpath for the flink sql engine, for configuring location of hadoop client jars, etc|string|1.6.0
 kyuubi.engine.flink.java.options|&lt;undefined&gt;|The extra java options for the flink sql engine|string|1.6.0
 kyuubi.engine.flink.memory|1g|The heap memory for the flink sql engine|string|1.6.0
+kyuubi.engine.hive.event.loggers|JSON|A comma separated list of engine history loggers, where engine/session/operation etc events go. We use spark logger by default.<ul> <li>JSON: the events will be written to the location of kyuubi.engine.event.json.log.path</li> <li>JDBC: to be done</li> <li>CUSTOM: to be done.</li></ul>|seq|1.7.0
 kyuubi.engine.hive.extra.classpath|&lt;undefined&gt;|The extra classpath for the hive query engine, for configuring location of hadoop client jars, etc|string|1.6.0
 kyuubi.engine.hive.java.options|&lt;undefined&gt;|The extra java options for the hive query engine|string|1.6.0
 kyuubi.engine.hive.memory|1g|The heap memory for the hive query engine|string|1.6.0
@@ -253,6 +251,8 @@ kyuubi.engine.share.level|USER|Engines will be shared in different levels, avail
 kyuubi.engine.share.level.sub.domain|&lt;undefined&gt;|(deprecated) - Using kyuubi.engine.share.level.subdomain instead|string|1.2.0
 kyuubi.engine.share.level.subdomain|&lt;undefined&gt;|Allow end-users to create a subdomain for the share level of an engine. A subdomain is a case-insensitive string values that must be a valid zookeeper sub path. For example, for `USER` share level, an end-user can share a certain engine within a subdomain, not for all of its clients. End-users are free to create multiple engines in the `USER` share level. When disable engine pool, use 'default' if absent.|string|1.4.0
 kyuubi.engine.single.spark.session|false|When set to true, this engine is running in a single session mode. All the JDBC/ODBC connections share the temporary views, function registries, SQL configuration and the current database.|boolean|1.3.0
+kyuubi.engine.spark.event.loggers|SPARK|A comma separated list of engine loggers, where engine/session/operation etc events go. We use spark logger by default.<ul> <li>SPARK: the events will be written to the spark listener bus.</li> <li>JSON: the events will be written to the location of kyuubi.engine.event.json.log.path</li> <li>JDBC: to be done</li> <li>CUSTOM: to be done.</li></ul>|seq|1.7.0
+kyuubi.engine.trino.event.loggers|JSON|A comma separated list of engine history loggers, where engine/session/operation etc events go. We use spark logger by default.<ul> <li>JSON: the events will be written to the location of kyuubi.engine.event.json.log.path</li> <li>JDBC: to be done</li> <li>CUSTOM: to be done.</li></ul>|seq|1.7.0
 kyuubi.engine.trino.extra.classpath|&lt;undefined&gt;|The extra classpath for the trino query engine, for configuring other libs which may need by the trino engine |string|1.6.0
 kyuubi.engine.trino.java.options|&lt;undefined&gt;|The extra java options for the trino query engine|string|1.6.0
 kyuubi.engine.trino.memory|1g|The heap memory for the trino query engine|string|1.6.0
@@ -420,6 +420,7 @@ kyuubi.operation.status.polling.timeout|PT5S|Timeout(ms) for long polling asynch
 
 Key | Default | Meaning | Type | Since
 --- | --- | --- | --- | ---
+kyuubi.server.info.provider|ENGINE|The server information provider name, some clients may rely on this information to check the server compatibilities and functionalities. <li>SERVER: Return Kyuubi server information.</li> <li>ENGINE: Return Kyuubi engine information.</li>|string|1.6.1
 kyuubi.server.limit.connections.per.ipaddress|&lt;undefined&gt;|Maximum kyuubi server connections per ipaddress. Any user exceeding this limit will not be allowed to connect.|int|1.6.0
 kyuubi.server.limit.connections.per.user|&lt;undefined&gt;|Maximum kyuubi server connections per user. Any user exceeding this limit will not be allowed to connect.|int|1.6.0
 kyuubi.server.limit.connections.per.user.ipaddress|&lt;undefined&gt;|Maximum kyuubi server connections per user:ipaddress combination. Any user-ipaddress exceeding this limit will not be allowed to connect.|int|1.6.0

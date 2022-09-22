@@ -25,6 +25,7 @@ import scala.util.Try
 import org.apache.commons.codec.digest.DigestUtils
 import org.apache.hadoop.security.UserGroupInformation
 import org.apache.spark.sql.{Row, SparkSessionExtensions}
+import org.apache.spark.sql.catalyst.analysis.NoSuchTableException
 import org.apache.spark.sql.catalyst.catalog.HiveTableRelation
 import org.apache.spark.sql.catalyst.plans.logical.Statistics
 import org.apache.spark.sql.execution.columnar.InMemoryRelation
@@ -33,8 +34,7 @@ import org.scalatest.BeforeAndAfterAll
 // scalastyle:off
 import org.scalatest.funsuite.AnyFunSuite
 
-import org.apache.kyuubi.plugin.spark.authz.AccessControlException
-import org.apache.kyuubi.plugin.spark.authz.SparkSessionProvider
+import org.apache.kyuubi.plugin.spark.authz.{AccessControlException, SparkSessionProvider}
 import org.apache.kyuubi.plugin.spark.authz.ranger.RuleAuthorization.KYUUBI_AUTHZ_TAG
 import org.apache.kyuubi.plugin.spark.authz.util.AuthZUtils.getFieldVal
 
@@ -76,6 +76,42 @@ abstract class RangerSparkExtensionSuite extends AnyFunSuite
           }
         case (_, e) =>
           throw new RuntimeException(s"the resource whose resource type is $e cannot be cleared")
+      }
+    }
+  }
+
+  /**
+   * Drops temporary view `viewNames` after calling `f`.
+   */
+  protected def withTempView(viewNames: String*)(f: => Unit): Unit = {
+    try {
+      f
+    } finally {
+      viewNames.foreach { viewName =>
+        try spark.catalog.dropTempView(viewName)
+        catch {
+          // If the test failed part way, we don't want to mask the failure by failing to remove
+          // temp views that never got created.
+          case _: NoSuchTableException =>
+        }
+      }
+    }
+  }
+
+  /**
+   * Drops global temporary view `viewNames` after calling `f`.
+   */
+  protected def withGlobalTempView(viewNames: String*)(f: => Unit): Unit = {
+    try {
+      f
+    } finally {
+      viewNames.foreach { viewName =>
+        try spark.catalog.dropGlobalTempView(viewName)
+        catch {
+          // If the test failed part way, we don't want to mask the failure by failing to remove
+          // global temp views that never got created.
+          case _: NoSuchTableException =>
+        }
       }
     }
   }
@@ -447,6 +483,114 @@ abstract class RangerSparkExtensionSuite extends AnyFunSuite
         assert(sql(s"show table extended from $db like '$table*'").collect().length === 0))
     }
   }
+
+  test("[KYUUBI #3430] AlterTableRenameCommand should skip permission check if it's tempview") {
+    val tempView = "temp_view"
+    val tempView2 = "temp_view2"
+    val globalTempView = "global_temp_view"
+    val globalTempView2 = "global_temp_view2"
+
+    // create or replace view
+    doAs("denyuser", sql(s"CREATE TEMPORARY VIEW $tempView AS select * from values(1)"))
+    doAs(
+      "denyuser",
+      sql(s"CREATE GLOBAL TEMPORARY VIEW $globalTempView AS SELECT * FROM values(1)"))
+
+    // rename view
+    doAs("denyuser2", sql(s"ALTER VIEW $tempView RENAME TO $tempView2"))
+    doAs(
+      "denyuser2",
+      sql(s"ALTER VIEW global_temp.$globalTempView RENAME TO global_temp.$globalTempView2"))
+
+    doAs("admin", sql(s"DROP VIEW IF EXISTS $tempView2"))
+    doAs("admin", sql(s"DROP VIEW IF EXISTS global_temp.$globalTempView2"))
+    doAs("admin", assert(sql("show tables from global_temp").collect().length == 0))
+  }
+
+  test("[KYUUBI #3426] Drop temp view should be skipped permission check") {
+    val tempView = "temp_view"
+    val globalTempView = "global_temp_view"
+    doAs("denyuser", sql(s"CREATE TEMPORARY VIEW $tempView AS select * from values(1)"))
+
+    doAs(
+      "denyuser",
+      sql(s"CREATE OR REPLACE TEMPORARY VIEW $tempView" +
+        s" AS select * from values(1)"))
+
+    doAs(
+      "denyuser",
+      sql(s"CREATE GLOBAL TEMPORARY VIEW $globalTempView AS SELECT * FROM values(1)"))
+
+    doAs(
+      "denyuser",
+      sql(s"CREATE OR REPLACE GLOBAL TEMPORARY VIEW $globalTempView" +
+        s" AS select * from values(1)"))
+
+    // global_temp will contain the temporary view, even if it is not global
+    doAs("admin", assert(sql("show tables from global_temp").collect().length == 2))
+
+    doAs("denyuser2", sql(s"DROP VIEW IF EXISTS $tempView"))
+    doAs("denyuser2", sql(s"DROP VIEW IF EXISTS global_temp.$globalTempView"))
+
+    doAs("admin", assert(sql("show tables from global_temp").collect().length == 0))
+  }
+
+  test("[KYUUBI #3428] AlterViewAsCommand should be skipped permission check") {
+    val tempView = "temp_view"
+    val globalTempView = "global_temp_view"
+
+    // create or replace view
+    doAs("denyuser", sql(s"CREATE TEMPORARY VIEW $tempView AS select * from values(1)"))
+    doAs(
+      "denyuser",
+      sql(s"CREATE OR REPLACE TEMPORARY VIEW $tempView" +
+        s" AS select * from values(1)"))
+    doAs(
+      "denyuser",
+      sql(s"CREATE GLOBAL TEMPORARY VIEW $globalTempView AS SELECT * FROM values(1)"))
+    doAs(
+      "denyuser",
+      sql(s"CREATE OR REPLACE GLOBAL TEMPORARY VIEW $globalTempView" +
+        s" AS select * from values(1)"))
+
+    // rename view
+    doAs("denyuser2", sql(s"ALTER VIEW $tempView AS SELECT * FROM values(1)"))
+    doAs("denyuser2", sql(s"ALTER VIEW global_temp.$globalTempView AS SELECT * FROM values(1)"))
+
+    doAs("admin", sql(s"DROP VIEW IF EXISTS $tempView"))
+    doAs("admin", sql(s"DROP VIEW IF EXISTS global_temp.$globalTempView"))
+    doAs("admin", assert(sql("show tables from global_temp").collect().length == 0))
+  }
+
+  test("[KYUUBI #3343] pass temporary view creation") {
+    val tempView = "temp_view"
+    val globalTempView = "global_temp_view"
+
+    withTempView(tempView) {
+      doAs(
+        "denyuser",
+        assert(Try(sql(s"CREATE TEMPORARY VIEW $tempView AS select * from values(1)")).isSuccess))
+
+      doAs(
+        "denyuser",
+        Try(sql(s"CREATE OR REPLACE TEMPORARY VIEW $tempView" +
+          s" AS select * from values(1)")).isSuccess)
+    }
+
+    withGlobalTempView(globalTempView) {
+      doAs(
+        "denyuser",
+        Try(
+          sql(
+            s"CREATE GLOBAL TEMPORARY VIEW $globalTempView AS SELECT * FROM values(1)")).isSuccess)
+
+      doAs(
+        "denyuser",
+        Try(sql(s"CREATE OR REPLACE GLOBAL TEMPORARY VIEW $globalTempView" +
+          s" AS select * from values(1)")).isSuccess)
+    }
+    doAs("admin", assert(sql("show tables from global_temp").collect().length == 0))
+  }
 }
 
 class InMemoryCatalogRangerSparkExtensionSuite extends RangerSparkExtensionSuite {
@@ -501,30 +645,6 @@ class HiveCatalogRangerSparkExtensionSuite extends RangerSparkExtensionSuite {
           val join = s"SELECT a.id, b.name FROM $db.$table1 a JOIN $db.$table2 b ON a.id=b.id"
           assert(sql(join).collect().length == 1)
         })
-    }
-  }
-
-  test("[KYUUBI #3343] pass temporary view creation") {
-    val table = "hive_src"
-    val tempView = "temp_view"
-    val globalTempView = "global_temp_view"
-
-    withCleanTmpResources(Seq((table, "table"))) {
-      doAs("admin", sql(s"CREATE TABLE IF NOT EXISTS $table (id int)"))
-
-      doAs("admin", sql(s"CREATE TEMPORARY VIEW $tempView AS select * from $table"))
-
-      doAs(
-        "admin",
-        sql(s"CREATE OR REPLACE TEMPORARY VIEW $tempView" +
-          s" AS select * from $table"))
-
-      doAs("admin", sql(s"CREATE GLOBAL TEMPORARY VIEW $globalTempView AS SELECT * FROM $table"))
-
-      doAs(
-        "admin",
-        sql(s"CREATE OR REPLACE GLOBAL TEMPORARY VIEW $globalTempView" +
-          s" AS select * from $table"))
     }
   }
 
@@ -656,7 +776,8 @@ class HiveCatalogRangerSparkExtensionSuite extends RangerSparkExtensionSuite {
 
         val e1 = intercept[AccessControlException](
           doAs("someone", sql(s"CACHE TABLE $cacheTable2 select * from $db1.$srcTable1")))
-        assert(e1.getMessage.contains(s"does not have [select] privilege on [$db1/$srcTable1/id]"))
+        assert(
+          e1.getMessage.contains(s"does not have [select] privilege on [$db1/$srcTable1/id]"))
 
         doAs("admin", sql(s"CACHE TABLE $cacheTable3 SELECT 1 AS a, 2 AS b "))
         doAs("someone", sql(s"CACHE TABLE $cacheTable4 select 1 as a, 2 as b "))
